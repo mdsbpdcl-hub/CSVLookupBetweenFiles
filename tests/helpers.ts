@@ -4,7 +4,7 @@
 import { MatchEngine, type EngineFile } from '../src/engine/core';
 import { memoryFactory } from '../src/engine/sink';
 import { cleanHeaders, CsvStreamParser } from '../src/engine/csv';
-import { makeKeyBuilder, parseDate, displayKey } from '../src/engine/normalize';
+import { makeKeyBuilder, parseDate, displayKey, upperSimple } from '../src/engine/normalize';
 import type { ExportOptions, FileMeta, MatchConfig, OutputConfig, Group } from '../src/engine/types';
 
 export function csv(rows: string[][], d = ','): string {
@@ -76,7 +76,7 @@ export function reference(files: EngineFile[], texts: Map<string, string>, cfg: 
       const kb = makeKeyBuilder(cfg.normalize, cfg.keyColumns[file.meta.id].map((c) => file.meta.headers.indexOf(c)));
       const di = cfg.dateColumns[file.meta.id] ? file.meta.headers.indexOf(cfg.dateColumns[file.meta.id]) : -1;
       const rules = cfg.filters.filter((x) => x.group === g);
-      const norm = (v: string) => v.replace(/^[ \t\r\n\f\v\u00a0]+|[ \t\r\n\f\v\u00a0]+$/g, '').toUpperCase();
+      const norm = (v: string) => upperSimple(v.replace(/^[ \t\r\n\f\v\u00a0]+|[ \t\r\n\f\v\u00a0]+$/g, ''));
       const ok = (f: string[]) =>
         rules.every((x) => {
           const i = file.meta.headers.indexOf(x.column);

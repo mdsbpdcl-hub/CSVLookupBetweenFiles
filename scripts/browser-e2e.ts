@@ -127,14 +127,14 @@ async function main() {
 
     step('matching');
     // 2 · Matching (key columns are auto-detected: Consumer ID / CA Number / CA No / Account No)
-    await clickText(page, 'Next: Matching');
+    await clickText(page, 'Next: Match');
     await sleep(300);
     const chosen = await page.$$eval('tbody select', (s) => (s as HTMLSelectElement[]).map((x) => x.value));
     result.autoKeys = chosen;
 
     step('output');
     // 3 · Output columns
-    await clickText(page, 'Next: Output Structure');
+    await clickText(page, 'Next: Columns');
     await sleep(300);
     const tick = async (group: 'A' | 'B', name: string) => {
       await page.evaluate((group, name) => {
@@ -172,9 +172,9 @@ async function main() {
 
     step('process');
     // 4 · Process
-    await clickText(page, 'Next: Process Data');
+    await clickText(page, 'Next: Process');
     await sleep(300);
-    if (MODE === 'B') await clickText(page, 'Mode B · DuckDB SQL engine');
+    if (MODE === 'B') await clickText(page, 'SQL engine (DuckDB)');
     await page.evaluate(() => ((window as any).__lag = 0));
     const tA = Date.now();
     await clickText(page, 'Start analysis');

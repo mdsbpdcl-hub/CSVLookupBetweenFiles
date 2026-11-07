@@ -133,6 +133,9 @@ and made matching ~10 % faster. All numbers above are after the fix.
 
 ## 3. Correctness checks
 
+A later, complete bug check (2,880 setting combinations, native DuckDB comparison, 27 browser checks, 10 fixes) is in [VERIFICATION.md](VERIFICATION.md).
+
+
 - **Automated tests** (`npm test`, 47 tests, run in CI before every deployment):
   parser edge cases at every chunk boundary (quotes, escaped quotes, multiline,
   CR/LF/CRLF), delimiter/encoding detection, normalisation, dates, CSV quoting and

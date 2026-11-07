@@ -87,7 +87,7 @@ export class EngineClient {
   }
 
   count(file: File, meta: FileMeta, onProgress: (done: number, total: number) => void) {
-    return this.call<{ rows: number; ms: number }>({ type: 'count', file, meta }, (m) => onProgress(m.done, m.total));
+    return this.call<{ rows: number; mixedNewlines: boolean; ms: number }>({ type: 'count', file, meta }, (m) => onProgress(m.done, m.total));
   }
 
   analyze(files: { meta: FileMeta; file: File }[], cfg: MatchConfig, out: OutputConfig, chunkBytes: number): Promise<{ stats: AnalysisStats; issues: number }> {

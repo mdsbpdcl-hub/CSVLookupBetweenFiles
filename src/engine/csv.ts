@@ -310,6 +310,7 @@ export async function countRecords(
   chunkBytes: number,
   onProgress?: (done: number, total: number) => void,
   isCancelled?: () => boolean,
+  lineEndings?: { cr: number; lf: number; crlf: number }, // filled with counts of record-ending styles
 ): Promise<number> {
   if (encoding === 'utf-16le' || encoding === 'utf-16be') {
     const n = await parseBlob(blob, delimiter, { encoding, chunkBytes, onChunk: onProgress, isCancelled }, () => {});
@@ -337,7 +338,15 @@ export async function countRecords(
       } else if (!inQ && (c === 10 || c === 13)) {
         if (c === 10 && prevCR) {
           prevCR = false;
+          if (lineEndings) {
+            lineEndings.cr--; // it was CRLF after all
+            lineEndings.crlf++;
+          }
           continue;
+        }
+        if (lineEndings) {
+          if (c === 13) lineEndings.cr++;
+          else lineEndings.lf++;
         }
         if (content) records++;
         content = false;
@@ -363,19 +372,56 @@ export async function transcodeToUtf8(
   blob: Blob,
   encoding: Encoding,
   write: (b: Uint8Array) => Promise<void>,
-  opts: { chunkBytes?: number; onProgress?: (done: number, total: number) => void; isCancelled?: () => boolean } = {},
+  opts: {
+    chunkBytes?: number;
+    onProgress?: (done: number, total: number) => void;
+    isCancelled?: () => boolean;
+    /** turn record-ending lone CR characters (outside quotes) into LF */
+    normalizeNewlines?: boolean;
+  } = {},
 ): Promise<void> {
   const dec = new TextDecoder(encoding);
   const enc = new TextEncoder();
   const chunk = opts.chunkBytes ?? 8 << 20;
   const total = blob.size;
+  let inQ = false;
+  let pendingCR = false; // chunk ended with a CR outside quotes
+  const fix = (t: string): string => {
+    if (!t) return t;
+    let out = '';
+    let from = 0;
+    let i = 0;
+    if (pendingCR) {
+      out += t.charCodeAt(0) === 10 ? '\r' : '\n';
+      pendingCR = false;
+    }
+    for (; i < t.length; i++) {
+      const c = t.charCodeAt(i);
+      if (c === 34) inQ = !inQ;
+      else if (c === 13 && !inQ) {
+        if (i + 1 < t.length) {
+          if (t.charCodeAt(i + 1) !== 10) {
+            out += t.slice(from, i) + '\n';
+            from = i + 1;
+          }
+        } else {
+          out += t.slice(from, i);
+          from = i + 1;
+          pendingCR = true;
+        }
+      }
+    }
+    return out + t.slice(from);
+  };
   for (let off = 0; off < total; ) {
     if (opts.isCancelled?.()) throw new CancelledError();
     const end = Math.min(total, off + chunk);
     const buf = await blob.slice(off, end).arrayBuffer();
     off = end;
-    const text = dec.decode(buf, { stream: off < total });
+    let text = dec.decode(buf, { stream: off < total });
+    if (opts.normalizeNewlines) text = fix(text);
     if (text) await write(enc.encode(text));
     opts.onProgress?.(off, total);
   }
+  if (pendingCR) await write(enc.encode('\n'));
 }

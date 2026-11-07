@@ -5,13 +5,28 @@ const WS_EDGE = /^[ \t\r\n\f\v ]+|[ \t\r\n\f\v ]+$/g;
 const WS_RUN = /[ \t\r\n\f\v ]+/g;
 const LEADING_ZEROS = /^0+(.)/;
 
+const NON_ASCII = /[^\x00-\x7f]/;
+const LOWER_ASCII = /[a-z]+/g;
+
+/**
+ * Case-insensitive comparison folds only the letters a–z to A–Z, in both engines
+ * (DuckDB uses translate() with the same 26 letters). Unicode upper-casing differs
+ * between JavaScript and DuckDB for some letters (JavaScript: "ß" → "SS", DuckDB:
+ * "ß" → "ẞ"), which would make the two engines disagree about matches. Consumer
+ * numbers and Hindi text are unaffected; accented Latin letters keep their case.
+ */
+export function upperSimple(s: string): string {
+  if (!NON_ASCII.test(s)) return s.toUpperCase();
+  return s.replace(LOWER_ASCII, (m) => m.toUpperCase());
+}
+
 /** Returns a function that normalises one key part. Values always stay strings. */
 export function makePartNormalizer(o: NormalizeOptions): (v: string) => string {
   return (v: string) => {
     let s = v;
     if (o.trim) s = s.replace(WS_EDGE, '');
     if (o.collapseSpaces) s = s.replace(WS_RUN, ' ');
-    if (o.ignoreCase) s = s.toUpperCase();
+    if (o.ignoreCase) s = upperSimple(s);
     if (o.stripLeadingZeros) s = s.replace(LEADING_ZEROS, '$1');
     return s;
   };

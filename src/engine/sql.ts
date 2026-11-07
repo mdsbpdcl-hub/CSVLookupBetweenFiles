@@ -3,12 +3,18 @@
 // Only the needed columns are materialised (column projection); everything is
 // read as VARCHAR so identifiers are never converted to numbers.
 
-import type { FileMeta, FilterRule, MatchConfig, OutputColumn, OutputConfig, DupPolicy } from './types';
+import type { AnalysisStats, FileMeta, FilterRule, MatchConfig, OutputColumn, OutputConfig, DupPolicy } from './types';
 import { resolveIndex } from './core';
+import { upperSimple } from './normalize';
 
 const WS = '[ \\t\\r\\n\\f\\v\\x{00A0}]';
 export const lit = (s: string) => "'" + s.replace(/'/g, "''") + "'";
 const WS_EDGE_JS = /^[ \t\r\n\f\v ]+|[ \t\r\n\f\v ]+$/g;
+
+/** Folds only a–z to A–Z (same as upperSimple in normalize.ts). */
+function upperAscii(e: string) {
+  return `translate(${e}, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')`;
+}
 
 function trimWs(e: string) {
   return `regexp_replace(${e}, '^${WS}+|${WS}+$', '', 'g')`;
@@ -19,7 +25,7 @@ function normExpr(col: string, cfg: MatchConfig): string {
   const o = cfg.normalize;
   if (o.trim) e = trimWs(e);
   if (o.collapseSpaces) e = `regexp_replace(${e}, '${WS}+', ' ', 'g')`;
-  if (o.ignoreCase) e = `upper(${e})`;
+  if (o.ignoreCase) e = upperAscii(e);
   if (o.stripLeadingZeros) e = `regexp_replace(${e}, '^0+(.)', '\\1')`;
   return e;
 }
@@ -37,7 +43,7 @@ export function readCsv(f: FileMeta, regName: string): string {
   const cols = f.headers.map((_, i) => `'c${i}': 'VARCHAR'`).join(', ');
   return (
     `read_csv(${lit(regName)}, header = true, delim = ${lit(f.delimiter)}, quote = '"', escape = '"', ` +
-    `columns = {${cols}}, auto_detect = false, null_padding = true, parallel = false, ` +
+    `columns = {${cols}}, auto_detect = false, null_padding = true, strict_mode = false, parallel = false, ` +
     `max_line_size = 16777216, encoding = ${lit(encodingOf(f))})`
   );
 }
@@ -48,8 +54,8 @@ function filterExpr(rules: FilterRule[], f: FileMeta): string {
   return rs
     .map((r) => {
       const i = f.headers.indexOf(r.column);
-      const v = i < 0 ? "''" : `upper(${trimWs(`coalesce(c${i}, '')`)})`;
-      const val = lit(r.value.replace(WS_EDGE_JS, '').toUpperCase());
+      const v = i < 0 ? "''" : upperAscii(trimWs(`coalesce(c${i}, '')`));
+      const val = lit(upperSimple(r.value.replace(WS_EDGE_JS, '')));
       switch (r.op) {
         case 'equals': return `(${v} = ${val})`;
         case 'not_equals': return `(${v} <> ${val})`;
@@ -280,4 +286,47 @@ export function buildOfflineScript(
     `COPY (SELECT ${cols} FROM (${plan.exportSql})) TO ${lit(outputName)} (HEADER, DELIMITER ${lit(delimiter)}, QUOTE '"');`,
     '',
   ].join('\n\n');
+}
+
+export function missingWarnings(files: FileMeta[], cfg: MatchConfig, out: OutputConfig): string[] {
+  const res: string[] = [];
+  for (const c of out.columns) {
+    if (c.kind !== 'field') continue;
+    for (const f of files.filter((x) => x.group === c.group)) {
+      if (cfg.bCombine === 'join' && c.group === 'B' && c.fromFile && c.fromFile !== f.id) continue;
+      if (resolveIndex(f, c) < 0)
+        res.push(`"${c.label}" is not present in ${f.name}; "${out.missingValue || '(blank)'}" will be written for its rows.`);
+    }
+  }
+  return res;
+}
+
+/** Turns the row returned by statsSql[0] (+ the exact output count) into AnalysisStats. */
+export function statsFromRow(s: Record<string, unknown>, outputRows: unknown, files: FileMeta[], cfg: MatchConfig, out: OutputConfig, ms: number): AnalysisStats {
+  const num = (v: unknown) => Number(v ?? 0);
+  const bOnly = cfg.operation === 'b_not_a';
+  return {
+    engine: 'B',
+    aRows: num(s.a_rows),
+    bRows: num(s.b_rows),
+    aUniqueKeys: num(s.a_keys),
+    bUniqueKeys: bOnly ? num(s.b_keys) : -1,
+    matchedKeys: num(s.matched),
+    unmatchedAKeys: num(s.a_keys) - num(s.matched),
+    unmatchedBKeys: bOnly ? num(s.b_keys) - num(s.matched) : -1,
+    aDuplicateKeys: num(s.a_dup_keys),
+    aDuplicateRows: num(s.a_dup_rows),
+    bDuplicateKeys: num(s.b_dup_keys),
+    bDuplicateRows: num(s.b_dup_rows),
+    aBlankKeys: num(s.a_blank),
+    bBlankKeys: num(s.b_blank),
+    aFiltered: num(s.a_filtered),
+    bFiltered: num(s.b_filtered),
+    malformedRows: -1,
+    badDates: num(s.bad_dates),
+    expectedOutputRows: num(outputRows),
+    cartesianKeys: num(s.cartesian),
+    missingFieldWarnings: missingWarnings(files, cfg, out),
+    analyzeMs: ms,
+  };
 }

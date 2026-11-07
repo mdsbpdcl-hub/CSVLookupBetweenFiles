@@ -3,7 +3,7 @@
 // The library and .wasm files are bundled with the app and loaded only on demand.
 
 import type { AsyncDuckDB, AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
-import { buildPlan, type SqlPlan } from '../engine/sql';
+import { buildPlan, statsFromRow, type SqlPlan } from '../engine/sql';
 import { RowWriter, type SinkFactory } from '../engine/sink';
 import type { AnalysisStats, ExportOptions, ExportResult, FileMeta, MatchConfig, OutputConfig, Progress } from '../engine/types';
 
@@ -98,31 +98,7 @@ export class DuckEngine {
     prog('Computing statistics', { bytesDone: totalBytes, bytesTotal: totalBytes, percent: 100 });
     const s = (await this.conn.query(this.plan.statsSql[0])).toArray()[0].toJSON();
     const n = (await this.conn.query(this.plan.countSql)).toArray()[0].toJSON();
-    const num = (v: unknown) => Number(v ?? 0);
-    this.stats = {
-      engine: 'B',
-      aRows: num(s.a_rows),
-      bRows: num(s.b_rows),
-      aUniqueKeys: num(s.a_keys),
-      bUniqueKeys: num(s.b_keys),
-      matchedKeys: num(s.matched),
-      unmatchedAKeys: num(s.a_keys) - num(s.matched),
-      unmatchedBKeys: num(s.b_keys) - num(s.matched),
-      aDuplicateKeys: num(s.a_dup_keys),
-      aDuplicateRows: num(s.a_dup_rows),
-      bDuplicateKeys: num(s.b_dup_keys),
-      bDuplicateRows: num(s.b_dup_rows),
-      aBlankKeys: num(s.a_blank),
-      bBlankKeys: num(s.b_blank),
-      aFiltered: num(s.a_filtered),
-      bFiltered: num(s.b_filtered),
-      malformedRows: -1,
-      badDates: num(s.bad_dates),
-      expectedOutputRows: num(n.n),
-      cartesianKeys: num(s.cartesian),
-      missingFieldWarnings: missingWarnings(files.map((f) => f.meta), cfg, out),
-      analyzeMs: Date.now() - t0,
-    };
+    this.stats = statsFromRow(s, n.n, files.map((f) => f.meta), cfg, out, Date.now() - t0);
     return this.stats;
   }
 
@@ -240,20 +216,6 @@ function splitUnion(body: string): string[] {
     }
   }
   return parts;
-}
-
-function missingWarnings(files: FileMeta[], cfg: MatchConfig, out: OutputConfig): string[] {
-  const res: string[] = [];
-  for (const c of out.columns) {
-    if (c.kind !== 'field') continue;
-    for (const f of files.filter((x) => x.group === c.group)) {
-      if (cfg.bCombine === 'join' && c.group === 'B' && c.fromFile && c.fromFile !== f.id) continue;
-      const name = c.perFile?.[f.id] ?? c.column ?? '';
-      if (!f.headers.includes(name))
-        res.push(`"${c.label}" is not present in ${f.name}; "${out.missingValue || '(blank)'}" will be written for its rows.`);
-    }
-  }
-  return res;
 }
 
 export function estimateDuckMB(files: FileMeta[], out: OutputConfig): number {

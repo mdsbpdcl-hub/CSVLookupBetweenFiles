@@ -19,6 +19,8 @@ export interface FileMeta {
   warnings: string[];
   /** set when the data comes from an Excel worksheet (converted to a temporary CSV) */
   source?: { kind: 'xlsx'; workbook: string; sheet: string; sheetPath: string; origSize: number };
+  /** records end with a mix of lone CR and LF characters (old Mac + Windows/Unix line endings) */
+  mixedNewlines?: boolean;
   /** Excel only: headings of columns that contain cells stored as numbers */
   numericColumns?: string[];
 }

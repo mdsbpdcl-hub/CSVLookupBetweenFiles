@@ -23,7 +23,7 @@ Consumer ID, Division  ×   CA Number, Name, Mobile …  →   CA Number, Divisi
 7. [Browser compatibility](#browser-compatibility)
 8. [Limits, memory and recovery](#limits-memory-and-recovery) (details: [docs/MEMORY.md](docs/MEMORY.md))
 9. [Offline alternative (Python + DuckDB)](#offline-alternative-python--duckdb)
-10. [Tests and benchmarks](#tests-and-benchmarks) (results: [docs/BENCHMARK.md](docs/BENCHMARK.md))
+10. [Tests and benchmarks](#tests-and-benchmarks) (results: [docs/BENCHMARK.md](docs/BENCHMARK.md), full bug check: [docs/VERIFICATION.md](docs/VERIFICATION.md))
 11. [Project structure](#project-structure)
 
 ---
@@ -33,7 +33,7 @@ Consumer ID, Division  ×   CA Number, Name, Mobile …  →   CA Number, Divisi
 - **Two upload areas** (Group A targets, Group B masters), multiple files each, drag and drop, add/remove individual files.
 - Per-file **name, size, row count, column count**, heading detection, validation warnings (blank/duplicate headings, single-column files, empty files, duplicate uploads).
 - **Excel input**: `.xlsx` / `.xlsm` workbooks (up to Excel's 10,48,576 rows per sheet), with a sheet picker and “add the other sheets” for multi-sheet workbooks — see [Excel files](#excel-files).
-- **Comma, semicolon, tab and pipe** delimiters (auto-detected, can be changed); quoted values, `""` escapes, **multiline cells**, CRLF/LF/CR; UTF-8 (with/without BOM), Windows-1252/ANSI (as saved by Excel's “CSV (Comma delimited)”) and UTF-16. For the SQL engine, non-UTF-8 files are first copied to UTF-8 in the background, because DuckDB rejects Windows-1252 characters such as curly quotes, dashes and €.
+- **Comma, semicolon, tab and pipe** delimiters; CRLF, LF, CR and mixed line endings (auto-detected, can be changed); quoted values, `""` escapes, **multiline cells**, CRLF/LF/CR; UTF-8 (with/without BOM), Windows-1252/ANSI (as saved by Excel's “CSV (Comma delimited)”) and UTF-16. For the SQL engine, non-UTF-8 files are first copied to UTF-8 in the background, because DuckDB rejects Windows-1252 characters such as curly quotes, dashes and €.
 - **Dynamic key selection**: different heading names per file, **composite keys** (2–4 columns), optional trim / space-collapsing / case-insensitive / leading-zero normalisation (leading-zero normalisation is off by default).
 - **Identifiers are always text** — never converted to numbers or scientific notation. **Blank keys never match** (also not each other).
 - Operations: **common consumers**, **A not found in B**, **B not found in A**, **all A with match status**.
@@ -87,11 +87,13 @@ No server, database, account or paid service is needed. GitHub Pages serves `.wa
 
 ## Using the application
 
-1. **Upload Files** — drop target files into *Group A* and master files into *Group B*. Rows are counted in the background; delimiter and encoding can be corrected per file.
-2. **Matching** — choose the key column for each file (obvious ones such as `Consumer ID`, `CA Number`, `CA No`, `Account No` are pre-selected). Use *Composite* for multi-column keys. Pick the operation, duplicate rules and, if needed, filters. Save as a template for next time.
-3. **Output Structure** — tick the columns to export, rename headings, reorder them, map differently-named columns per file, add status/source/count columns.
-4. **Process Data** — choose the engine (Mode A is recommended) and run the analysis. You see matched consumers, duplicates, blank keys and the exact number of result rows. Nothing is exported yet.
-5. **Results & Export** — check the preview, choose name/format/destination and export. A completion message lists every file written with row counts, sizes and warnings. Reports (summary, duplicates, data issues) are separate downloads.
+The interface is deliberately simple: five steps, one accent colour, and less-used settings (normalisation, several-B-files mode, filters, split/separator export options, engine details) folded under *Advanced options* / *More …* links.
+
+1. **Files** — drop target files into *Group A* and master files into *Group B*. Rows are counted in the background; delimiter and encoding can be corrected per file.
+2. **Match** — choose the key column for each file (obvious ones such as `Consumer ID`, `CA Number`, `CA No`, `Account No` are pre-selected). Use *Composite* for multi-column keys. Pick the operation, duplicate rules and, if needed, filters. Save as a template for next time.
+3. **Columns** — tick the columns to export, rename headings, reorder them, map differently-named columns per file, add status/source/count columns.
+4. **Process** — choose the engine (**Standard** = Mode A, recommended; **SQL engine (DuckDB)** = Mode B) and run the analysis. You see matched consumers, duplicates, blank keys and the exact number of result rows. Nothing is exported yet.
+5. **Results** — check the preview, choose name/format/destination and export. A completion message lists every file written with row counts, sizes and warnings. Reports (summary, duplicates, data issues) are separate downloads.
 
 ### Excel files
 
@@ -124,7 +126,7 @@ Excel workbooks (`.xlsx`, `.xlsm`) can be dropped into either group, alone or mi
 - **Minimum memory**: Group A rows are not kept, only their keys; Group B rows are kept only if they match, and only the selected output fields. Retained strings are compacted so they do not pin multi-megabyte parser chunks.
 - **Streaming output**: rows are encoded in ~1 MB batches and written directly to the destination file; the result is never assembled as one big string.
 - **Engine choice**: Mode A has the lowest memory use for every workload and is the default. Mode B (DuckDB) loads the needed columns into an in-browser database; it is useful for cross-checking and for small/medium data. The *Process* step shows a memory estimate for each and warns when Mode B is unsuitable.
-- **Correctness**: both engines are tested against a deliberately simple in-memory reference implementation on hundreds of randomised configurations (all operations × duplicate rules × combine modes × normalisation × filters × multiline/quoted data × different delimiters).
+- **Correctness**: both engines are compared with each other and with a deliberately simple reference implementation for **all 2,880 combinations** of operation, duplicate rules, combine mode, normalisation and filters on deliberately awkward files — output rows, every statistic and the duplicate report. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ## Browser compatibility
 
@@ -164,8 +166,12 @@ python python/offline_matcher.py match --a targets.csv --a-key "Consumer ID" \
 ## Tests and benchmarks
 
 ```bash
-npm test                                        # 47 tests: parser, normaliser, writer, XLSX, splitting,
-                                                # Excel reader, Mode A and Mode B (real DuckDB-Wasm) vs. reference
+npm test                                        # 49 tests: parser, normaliser, writer, XLSX, splitting,
+                                                # Excel reader, Mode A and Mode B (real DuckDB-Wasm) vs. reference,
+                                                # 180-combination engine comparison
+npm run test:full                               # all 2,880 setting combinations compared (~5 min)
+npm run compare:offline                         # app engine vs native DuckDB offline tool
+npm run test:browser                            # 27 feature checks in headless Chrome (after npm run build)
 npm run gen:data -- --a 200000 --b 1000000 --bfiles 3 --match 0.6 --dups 0.03 --out test-data/10L
 npm run bench -- --data test-data/10L           # engine benchmark (Node), verified against ground truth
 npm run build && npm run bench:browser -- --data test-data/10L --mode A   # full UI run in headless Chrome
@@ -183,10 +189,10 @@ src/engine/        types · csv (streaming parser, counter, detection) · xlsx (
 src/workers/       engine.worker.ts — inspection, counting, analysis, preview, export
 src/lib/           engineClient (worker wrapper) · duckClient (DuckDB-Wasm) · files · templates · format
 src/components/    Upload · Matching · Output · Process · Results · ui
-tests/             engine.test.ts · duckdb.test.ts · xlsx.test.ts · helpers.ts (reference implementation) · fixtures/
-scripts/           generate-test-data · csv-to-xlsx.py · benchmark · bench-xlsx · browser-e2e (headless Chrome) · make-offline-job
+tests/             engine.test.ts · duckdb.test.ts · xlsx.test.ts · compare.test.ts · helpers.ts (reference implementation) · fixtures/
+scripts/           generate-test-data · csv-to-xlsx.py · benchmark · bench-xlsx · browser-e2e · browser-features (headless Chrome) · compare-offline · make-offline-job
 python/            offline_matcher.py
-docs/              MEMORY.md · BENCHMARK.md
+docs/              MEMORY.md · BENCHMARK.md · VERIFICATION.md
 samples/           small synthetic Group A / Group B files + manifest
 bench-results/     raw benchmark measurements (JSON)
 ```

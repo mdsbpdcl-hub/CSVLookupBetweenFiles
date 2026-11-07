@@ -10,7 +10,7 @@
 // O(total input size). No pairwise comparisons: every lookup is a hash probe.
 
 import { parseBlob, CancelledError, CsvStreamParser } from './csv';
-import { makeKeyBuilder, displayKey, parseDate } from './normalize';
+import { makeKeyBuilder, displayKey, parseDate, upperSimple } from './normalize';
 import { RowWriter, type SinkFactory } from './sink';
 import type {
   AnalysisStats, ExportOptions, ExportResult, FileMeta, FilterRule, IssueRow,
@@ -87,8 +87,8 @@ function compileFilters(rules: FilterRule[], meta: FileMeta): Pred | null {
   if (!rs.length) return null;
   const tests = rs.map((r) => {
     const idx = meta.headers.indexOf(r.column);
-    const val = r.value.replace(WS_EDGE, '').toUpperCase();
-    const get = (f: string[]) => (idx < 0 ? '' : (f[idx] ?? '').replace(WS_EDGE, '').toUpperCase());
+    const val = upperSimple(r.value.replace(WS_EDGE, ''));
+    const get = (f: string[]) => (idx < 0 ? '' : upperSimple((f[idx] ?? '').replace(WS_EDGE, '')));
     switch (r.op) {
       case 'equals': return (f: string[]) => get(f) === val;
       case 'not_equals': return (f: string[]) => get(f) !== val;
@@ -117,6 +117,14 @@ export function validateConfig(files: FileMeta[], cfg: MatchConfig, out: OutputC
   if (!B.length) errs.push('Add at least one Group B (master) file.');
   let parts = -1;
   for (const f of files) {
+    if (f.status === 'error') {
+      errs.push(`"${f.name}" could not be read — remove it or add it again.`);
+      continue;
+    }
+    if (!f.headers.length) {
+      errs.push(`"${f.name}" has no heading row (empty file) — remove it.`);
+      continue;
+    }
     const k = cfg.keyColumns[f.id] ?? [];
     if (!k.length || k.some((c) => !c)) errs.push(`Choose the matching column(s) for "${f.name}".`);
     else if (k.some((c) => !f.headers.includes(c))) errs.push(`A matching column for "${f.name}" is not in that file.`);

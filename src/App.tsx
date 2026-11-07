@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { AnalysisStats, Encoding, ExportOptions, ExportResult, FileMeta, Group, MatchConfig, OutputConfig, Progress } from './engine/types';
 import { validateConfig } from './engine/core';
 import { EngineClient, EngineError } from './lib/engineClient';
 import type { DuckEngine } from './lib/duckClient';
 import { directoryFactory, fileHandleFactory, memoryFactory, opfsFactory, type SinkFactory } from './engine/sink';
 import { caps, clearTemporary, deliver, downloadText, pickTarget } from './lib/files';
-import { csvNameFor, fmtMs, fmtNum, isExcel, isOldExcel, uid } from './lib/format';
+import { csvNameFor, fmtMs, isExcel, isOldExcel, uid } from './lib/format';
 import { cleanHeaders } from './engine/csv';
 import { removeConverted } from './engine/sink';
 import Upload from './components/Upload';
@@ -13,7 +13,7 @@ import Matching from './components/Matching';
 import Output from './components/Output';
 import Process from './components/Process';
 import Results from './components/Results';
-import { Icon, Kpi } from './components/ui';
+import { Icon } from './components/ui';
 
 export interface Entry {
   meta: FileMeta;
@@ -47,29 +47,15 @@ const defaultCfg: MatchConfig = {
   filters: [],
 };
 
-const THEMES = [
-  { id: 'sunrise', c: 'linear-gradient(135deg,#f0752f,#f7a531)' },
-  { id: 'sky', c: 'linear-gradient(135deg,#2f7df6,#22c1dc)' },
-  { id: 'mint', c: 'linear-gradient(135deg,#0a9b85,#4eb068)' },
-  { id: 'lavender', c: 'linear-gradient(135deg,#7a65c2,#e27aab)' },
-];
-
 const STEPS = [
-  { l: 'Upload Files', s: 'Group A and Group B', i: 'upload' },
-  { l: 'Matching', s: 'Keys and rules', i: 'link' },
-  { l: 'Output Structure', s: 'Columns and headings', i: 'columns' },
-  { l: 'Process Data', s: 'Analyse and check', i: 'play' },
-  { l: 'Results & Export', s: 'Preview and save', i: 'download' },
+  { l: 'Files', s: 'Group A and Group B', i: 'upload' },
+  { l: 'Match', s: 'Keys and rules', i: 'link' },
+  { l: 'Columns', s: 'Columns and headings', i: 'columns' },
+  { l: 'Process', s: 'Analyse and check', i: 'play' },
+  { l: 'Results', s: 'Preview and save', i: 'download' },
 ];
 
 export default function App() {
-  const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem('csv-matcher-theme') || 'sunrise'; } catch { return 'sunrise'; }
-  });
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem('csv-matcher-theme', theme); } catch { /* private mode */ }
-  }, [theme]);
 
   const [step, setStep] = useState(0);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -102,7 +88,7 @@ export default function App() {
     setEntries((es) => es.map((e) => (e.meta.id === id ? { ...e, ...extra, meta: { ...e.meta, ...p } } : e)));
 
   // Analysis becomes stale whenever files or settings change.
-  const sig = JSON.stringify([metas.map((m) => [m.id, m.delimiter, m.encoding, m.rows]), cfg, out, mode]);
+  const sig = JSON.stringify([metas.map((m) => [m.id, m.delimiter, m.encoding, m.rows, m.size, m.headers.length, m.source?.sheetPath]), cfg, out, mode]);
   const lastSig = useRef(sig);
   useEffect(() => {
     if (sig !== lastSig.current) {
@@ -209,7 +195,7 @@ export default function App() {
       const res = await inspector.current!.count(e.file, { ...e.meta, ...meta } as FileMeta, (done, total) =>
         patchMeta(id, {}, { countPct: total ? (done / total) * 100 : 100 }),
       );
-      patchMeta(id, { rows: res.rows, status: 'ready', warnings: res.rows === 0 ? [...warnings, 'No data rows (heading only).'] : warnings }, { countPct: undefined });
+      patchMeta(id, { rows: res.rows, mixedNewlines: res.mixedNewlines, status: 'ready', warnings: res.rows === 0 ? [...warnings, 'No data rows (heading only).'] : warnings }, { countPct: undefined });
     } catch (err) {
       patchMeta(id, { status: 'error', error: (err as Error).message });
     }
@@ -259,7 +245,13 @@ export default function App() {
     inspectEntry({ ...e, meta: { ...e.meta, ...patch } }, { delimiter: patch.delimiter ?? e.meta.delimiter, encoding: patch.encoding ?? e.meta.encoding });
   }
 
-  const errors = useMemo(() => (entries.length ? validateConfig(metas, cfg, out) : ['Add files to begin.']), [metas, cfg, out, entries.length]);
+  const errors = useMemo(() => {
+    if (!entries.length) return ['Add files to begin.'];
+    const errs = validateConfig(metas, cfg, out);
+    const busyFiles = metas.filter((m) => m.status === 'counting' || m.status === 'reading' || m.status === 'converting');
+    if (busyFiles.length) errs.unshift(`Please wait: ${busyFiles.map((m) => m.name).join(', ')} ${busyFiles.length > 1 ? 'are' : 'is'} still being read.`);
+    return errs;
+  }, [metas, cfg, out, entries.length]);
   const filesReady =
     entries.length > 0 &&
     entries.every((e) => e.meta.status === 'ready' || e.meta.status === 'counting') &&
@@ -272,11 +264,12 @@ export default function App() {
     let payload = entries.map((e) => ({ meta: e.meta, file: e.csv ?? e.file }));
     try {
       if (mode === 'B') {
-        // DuckDB reads UTF-8 reliably; other encodings are first copied to UTF-8 in the background.
+        // DuckDB reads UTF-8 reliably; other encodings (and mixed line endings) are first copied to clean UTF-8 in the background.
         const t0 = Date.now();
         payload = [];
         for (const e of entriesRef.current) {
-          if (e.csv || e.meta.encoding === 'utf-8') {
+          // DuckDB also mis-reads records that end with a lone CR inside a CRLF/LF file
+          if (e.csv || (e.meta.encoding === 'utf-8' && !e.meta.mixedNewlines)) {
             payload.push({ meta: e.meta, file: e.csv ?? e.file });
             continue;
           }
@@ -304,9 +297,14 @@ export default function App() {
       }
       setStats(s);
       lastSig.current = sig;
-      setBusy('preview');
-      const pv = mode === 'A' ? await engine.current!.preview(500) : await duck.current!.preview(500);
-      setPreview(pv);
+      if (s.cartesianKeys > 0 && !cfg.allowCartesian) {
+        // the result is blocked until multiplication is allowed, so there is nothing to preview
+        setPreview({ header: out.columns.map((c) => c.label), rows: [] });
+      } else {
+        setBusy('preview');
+        const pv = mode === 'A' ? await engine.current!.preview(500) : await duck.current!.preview(500);
+        setPreview(pv);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -316,7 +314,10 @@ export default function App() {
 
   async function cancel() {
     if (mode === 'A' || busy === 'export') await engine.current!.cancel();
-    if (mode === 'B') await duck.current?.cancel();
+    if (mode === 'B') {
+      await duck.current?.cancel();
+      await inspector.current!.cancel(); // stops a UTF-8 preparation copy, if one is running
+    }
   }
 
   async function doExport(report?: 'duplicates' | 'issues') {
@@ -412,11 +413,21 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
-  const aRows = metas.filter((m) => m.group === 'A');
-  const bRows = metas.filter((m) => m.group === 'B');
-  const sumRows = (ms: FileMeta[]) => (ms.length && ms.every((m) => m.rows !== undefined) ? ms.reduce((s, m) => s + (m.rows ?? 0), 0) : undefined);
-  const lastExport = exports.find((x) => x.label === 'Matched output');
-  const unmatched = stats ? (cfg.operation === 'b_not_a' ? stats.unmatchedBKeys : stats.unmatchedAKeys) : undefined;
+  // Test hook for the automated browser tests (only when the page is opened with ?e2e).
+  useEffect(() => {
+    if (new URLSearchParams(location.search).has('e2e'))
+      (window as any).__cm = { cfg, out, metas, mode, stats, setCfg, setOut, setMode, setExportOpts, exportOpts };
+  });
+
+
+  const nextHint =
+    step === 0 && !filesReady
+      ? entries.some((e) => e.meta.group === 'A') && entries.some((e) => e.meta.group === 'B')
+        ? 'Reading files…'
+        : 'Add at least one file to each group'
+      : step === 3 && !stats
+        ? 'Run the analysis to continue'
+        : '';
 
   const canGo = (i: number) =>
     i === 0 || (i === 1 && filesReady) || (i === 2 && filesReady) || (i === 3 && filesReady) || (i === 4 && !!stats);
@@ -425,36 +436,23 @@ export default function App() {
     <>
       <header className="top">
         <div className="top-in">
-          <div className="logo"><Icon name="bolt" size={20} /></div>
-          <div>
-            <div className="title">Consumer CSV Matcher</div>
-            <div className="subtitle">Match, extract and export consumer records · {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
-          </div>
+          <div className="logo"><Icon name="bolt" size={16} /></div>
+          <div className="title">Consumer CSV Matcher</div>
           <div className="spacer" />
-          <span className="privacy-pill"><Icon name="shield" size={14} /> Processed only on this device</span>
-          <div className="themes">
-            {THEMES.map((t) => <button key={t.id} title={t.id} className={theme === t.id ? 'on' : ''} style={{ background: t.c }} onClick={() => setTheme(t.id)} />)}
-          </div>
+          <span className="privacy"><Icon name="shield" size={15} /><span>Files stay on this computer</span></span>
         </div>
       </header>
       <main>
-        <div className="kpis">
-          <Kpi label="Group A Records" value={fmtNum(stats?.aRows ?? sumRows(aRows))} hint={`${aRows.length} file(s)`} color="#3538cd" />
-          <Kpi label="Group B Records" value={fmtNum(stats?.bRows ?? sumRows(bRows))} hint={`${bRows.length} file(s)`} color="#c11574" />
-          <Kpi label="Unique Consumer Keys" value={fmtNum(stats?.aUniqueKeys)} hint="in Group A" color="#0a9b85" />
-          <Kpi label="Matched Consumers" value={fmtNum(stats?.matchedKeys)} hint="unique keys in both" color="#12a150" />
-          <Kpi label="Unmatched Consumers" value={fmtNum(unmatched)} hint={cfg.operation === 'b_not_a' ? 'B keys not in A' : 'A keys not in B'} color="#e8a10c" />
-          <Kpi label="Duplicate Keys" value={stats ? `${fmtNum(stats.aDuplicateKeys)} / ${fmtNum(stats.bDuplicateKeys)}` : '—'} hint="A / B" color="#e03b3b" />
-          <Kpi label="Result Rows" value={fmtNum(lastExport?.result.rows ?? stats?.expectedOutputRows)} hint={lastExport ? 'exported' : stats ? 'expected' : ''} color="var(--g1)" />
-          <Kpi label="Processing Duration" value={stats ? fmtMs(stats.analyzeMs + (lastExport?.result.ms ?? 0)) : '—'} hint={lastExport ? 'analysis + export' : 'analysis'} color="#7a65c2" />
-        </div>
-
-        <nav className="steps">
+        <nav className="steps" aria-label="Steps">
           {STEPS.map((s, i) => (
-            <button key={s.l} className={`step ${step === i ? 'on' : ''} ${i < step ? 'done' : ''}`} disabled={!canGo(i) || !!busy} onClick={() => setStep(i)}>
-              <span className="n">{i + 1}</span>
-              <span><span className="l">{s.l}</span><br /><span className="s">{s.s}</span></span>
-            </button>
+            <Fragment key={s.l}>
+              {i > 0 && <span className={`bar ${i <= step ? 'done' : ''}`} />}
+              <button className={`step ${step === i ? 'on' : ''} ${i < step ? 'done' : ''}`} disabled={!canGo(i) || !!busy} onClick={() => setStep(i)} aria-current={step === i ? 'step' : undefined}>
+                <span className="n">{i < step ? <Icon name="check" size={14} /> : i + 1}</span>
+                <span className="l">{s.l}</span>
+                <span className="s">{s.s}</span>
+              </button>
+            </Fragment>
           ))}
         </nav>
 
@@ -479,11 +477,21 @@ export default function App() {
           />
         )}
 
-        <div className="actions">
-          <button className="btn" disabled={step === 0 || !!busy} onClick={() => setStep(step - 1)}>← Back</button>
-          {step < 3 && <button className="btn primary" disabled={!canGo(step + 1) || !!busy} onClick={() => setStep(step + 1)}>Next: {STEPS[step + 1].l} →</button>}
-        </div>
       </main>
+      <div className="actions">
+        <div className="actions-in">
+          <button className="btn" disabled={step === 0 || !!busy} onClick={() => setStep(step - 1)}>← Back</button>
+          <span className="hint">{nextHint}</span>
+          {step < 3 && (
+            <button className="btn primary" disabled={!canGo(step + 1) || !!busy} onClick={() => setStep(step + 1)}>
+              Next: {STEPS[step + 1].l} →
+            </button>
+          )}
+          {step === 3 && (
+            <button className="btn primary" disabled={!stats || !!busy} onClick={() => setStep(4)}>Next: {STEPS[4].l} →</button>
+          )}
+        </div>
+      </div>
     </>
   );
 }

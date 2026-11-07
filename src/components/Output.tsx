@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { FileMeta, Group, MatchConfig, MetaKind, OutputColumn, OutputConfig } from '../engine/types';
 import { uid } from '../lib/format';
-import { Icon, Note } from './ui';
+import { Icon, Note, PageHead } from './ui';
 
 interface Props {
   files: FileMeta[];
@@ -92,6 +92,8 @@ export default function Output({ files, cfg, out, setOut }: Props) {
   });
 
   return (
+    <>
+    <PageHead title="Which columns do you want?" sub="Tick columns on the left. On the right, rename them and set the order — the file is written exactly like this." />
     <div className="builder">
       <div className="card">
         <h2>Available columns</h2>
@@ -114,7 +116,7 @@ export default function Output({ files, cfg, out, setOut }: Props) {
               ))}
             </div>
           ))}
-          <div className="grp">EXTRA INFORMATION</div>
+          <div className="grp">EXTRA INFORMATION (OPTIONAL)</div>
           {METAS.filter((m) => m.label.toLowerCase().includes(ql)).map((m) => (
             <label key={m.m} title={m.d}>
               <input type="checkbox" checked={metaOn(m.m)} onChange={() => toggleMeta(m.m, m.label)} />
@@ -124,16 +126,15 @@ export default function Output({ files, cfg, out, setOut }: Props) {
         </div>
       </div>
       <div className="card">
-        <h2>Output structure <span className="tag none">{out.columns.length} columns</span></h2>
-        <p className="lead">The file is written in exactly this order with these headings.</p>
-        {out.columns.length === 0 && <Note kind="warn">Tick columns on the left to build the output.</Note>}
+        <h2>Your output <span className="tag none">{out.columns.length} columns</span></h2>
+        {out.columns.length === 0 && <p className="muted" style={{ padding: '30px 0', textAlign: 'center' }}>Nothing selected yet — tick columns on the left.</p>}
         {out.columns.map((c, i) => {
           const gFiles = c.kind === 'field' ? files.filter((f) => f.group === c.group) : [];
           const lacking = gFiles.filter((f) => !f.headers.includes(c.column!));
           return (
             <div key={c.id} className="sel-row">
               <div className="idx">{i + 1}</div>
-              <div>{c.kind === 'field' ? <span className={`tag ${c.group === 'A' ? 'a' : 'b'}`}>Group {c.group}</span> : <span className="tag none">Info</span>}</div>
+              <div>{c.kind === 'field' ? <span className={`tag ${c.group === 'A' ? 'a' : 'b'}`}>{c.group}</span> : <span className="tag none">Info</span>}</div>
               <div className="src" title={c.column ?? c.meta}>{c.kind === 'field' ? c.column : METAS.find((m) => m.m === c.meta)?.label}</div>
               <input type="text" value={c.label} onChange={(e) => update(c.id, { label: e.target.value })} aria-label="Output heading" />
               <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
@@ -164,8 +165,8 @@ export default function Output({ files, cfg, out, setOut }: Props) {
             </div>
           );
         })}
-        <div className="row" style={{ marginTop: 12 }}>
-          <label className="field"><span>Value for missing fields / no match</span>
+        <div className="row" style={{ marginTop: 14 }}>
+          <label className="field"><span>Write this when a value is missing</span>
             <input type="text" value={out.missingValue} placeholder="(blank)" onChange={(e) => setOut({ ...out, missingValue: e.target.value })} />
           </label>
         </div>
@@ -179,5 +180,6 @@ export default function Output({ files, cfg, out, setOut }: Props) {
         )}
       </div>
     </div>
+    </>
   );
 }

@@ -257,3 +257,18 @@ describe('randomised equivalence with reference implementation', () => {
     });
   }
 });
+
+describe('line endings', () => {
+  it('detects mixed lone-CR / LF record endings and normalises them at any chunk size', async () => {
+    const { transcodeToUtf8 } = await import('../src/engine/csv');
+    const text = 'a,b\r\nk1,"x\ry"\rk2,z\nk3,w\r';
+    const le = { cr: 0, lf: 0, crlf: 0 };
+    await countRecords(new Blob([text]), 'utf-8', ',', 3, undefined, undefined, le);
+    expect(le).toEqual({ cr: 2, lf: 1, crlf: 1 });
+    for (let c = 1; c <= text.length; c++) {
+      const parts: Uint8Array[] = [];
+      await transcodeToUtf8(new Blob([text]), 'utf-8', async (b) => void parts.push(b), { chunkBytes: c, normalizeNewlines: true });
+      expect(await new Blob(parts as BlobPart[]).text()).toBe('a,b\r\nk1,"x\ry"\nk2,z\nk3,w\n');
+    }
+  });
+});

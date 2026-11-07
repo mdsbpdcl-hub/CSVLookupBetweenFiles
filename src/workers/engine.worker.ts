@@ -146,6 +146,7 @@ self.onmessage = async (ev: MessageEvent) => {
         let last = 0;
         try {
           await transcodeToUtf8(m.file, m.encoding, write, {
+            normalizeNewlines: true,
             isCancelled: () => cancelled,
             onProgress: (done, total) => {
               const now = Date.now();
@@ -165,10 +166,11 @@ self.onmessage = async (ev: MessageEvent) => {
       case 'count': {
         cancelled = false;
         const meta: FileMeta = m.meta;
+        const le = { cr: 0, lf: 0, crlf: 0 };
         const rows = await countRecords(m.file, meta.encoding, meta.delimiter, 8 << 20, (done, total) => {
           post({ type: 'countProgress', reqId: m.reqId, done, total });
-        });
-        post({ type: 'counted', reqId: m.reqId, rows, ms: Date.now() - t0 });
+        }, undefined, le);
+        post({ type: 'counted', reqId: m.reqId, rows, mixedNewlines: le.cr > 0 && le.lf + le.crlf > 0, ms: Date.now() - t0 });
         break;
       }
       case 'analyze': {
