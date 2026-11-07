@@ -89,7 +89,12 @@ def run_job(args) -> None:
     for n, s in enumerate(stmts, 1):
         label = s.split('\n', 1)[0][:70]
         t = time.time()
-        con.execute(s)
+        try:
+            con.execute(s)
+        except Exception as e:  # noqa: BLE001
+            if 'latin-1' in str(e) or 'encoded' in str(e):
+                sys.exit(f"{e}\nA CSV file is not UTF-8. Open it in Excel and use Save As -> 'CSV UTF-8 (Comma delimited)', then run again.")
+            raise
         print(f"[{n}/{len(stmts)}] {time.time() - t:6.1f}s  {label}")
     rows = con.execute("SELECT count(*) FROM cm_a").fetchone()[0], con.execute("SELECT count(*) FROM cm_b").fetchone()[0]
     print(f"Done in {time.time() - t0:.1f}s. Group A rows: {rows[0]:,}  Group B rows: {rows[1]:,}")

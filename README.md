@@ -33,7 +33,7 @@ Consumer ID, Division  ×   CA Number, Name, Mobile …  →   CA Number, Divisi
 - **Two upload areas** (Group A targets, Group B masters), multiple files each, drag and drop, add/remove individual files.
 - Per-file **name, size, row count, column count**, heading detection, validation warnings (blank/duplicate headings, single-column files, empty files, duplicate uploads).
 - **Excel input**: `.xlsx` / `.xlsm` workbooks (up to Excel's 10,48,576 rows per sheet), with a sheet picker and “add the other sheets” for multi-sheet workbooks — see [Excel files](#excel-files).
-- **Comma, semicolon, tab and pipe** delimiters (auto-detected, can be changed); quoted values, `""` escapes, **multiline cells**, CRLF/LF/CR; UTF-8 (with/without BOM), Windows-1252/ANSI and UTF-16.
+- **Comma, semicolon, tab and pipe** delimiters (auto-detected, can be changed); quoted values, `""` escapes, **multiline cells**, CRLF/LF/CR; UTF-8 (with/without BOM), Windows-1252/ANSI (as saved by Excel's “CSV (Comma delimited)”) and UTF-16. For the SQL engine, non-UTF-8 files are first copied to UTF-8 in the background, because DuckDB rejects Windows-1252 characters such as curly quotes, dashes and €.
 - **Dynamic key selection**: different heading names per file, **composite keys** (2–4 columns), optional trim / space-collapsing / case-insensitive / leading-zero normalisation (leading-zero normalisation is off by default).
 - **Identifiers are always text** — never converted to numbers or scientific notation. **Blank keys never match** (also not each other).
 - Operations: **common consumers**, **A not found in B**, **B not found in A**, **all A with match status**.
@@ -164,7 +164,7 @@ python python/offline_matcher.py match --a targets.csv --a-key "Consumer ID" \
 ## Tests and benchmarks
 
 ```bash
-npm test                                        # 46 tests: parser, normaliser, writer, XLSX, splitting,
+npm test                                        # 47 tests: parser, normaliser, writer, XLSX, splitting,
                                                 # Excel reader, Mode A and Mode B (real DuckDB-Wasm) vs. reference
 npm run gen:data -- --a 200000 --b 1000000 --bfiles 3 --match 0.6 --dups 0.03 --out test-data/10L
 npm run bench -- --data test-data/10L           # engine benchmark (Node), verified against ground truth

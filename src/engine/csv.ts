@@ -353,3 +353,29 @@ export async function countRecords(
   if (content) records++;
   return Math.max(0, records - 1);
 }
+
+/**
+ * Streams a non-UTF-8 text file into UTF-8, chunk by chunk. Used before handing a
+ * file to DuckDB, whose Latin-1 reader rejects Windows-1252 characters in the
+ * 0x80–0x9F range (curly quotes, dashes, € …) that Excel "ANSI" CSV files contain.
+ */
+export async function transcodeToUtf8(
+  blob: Blob,
+  encoding: Encoding,
+  write: (b: Uint8Array) => Promise<void>,
+  opts: { chunkBytes?: number; onProgress?: (done: number, total: number) => void; isCancelled?: () => boolean } = {},
+): Promise<void> {
+  const dec = new TextDecoder(encoding);
+  const enc = new TextEncoder();
+  const chunk = opts.chunkBytes ?? 8 << 20;
+  const total = blob.size;
+  for (let off = 0; off < total; ) {
+    if (opts.isCancelled?.()) throw new CancelledError();
+    const end = Math.min(total, off + chunk);
+    const buf = await blob.slice(off, end).arrayBuffer();
+    off = end;
+    const text = dec.decode(buf, { stream: off < total });
+    if (text) await write(enc.encode(text));
+    opts.onProgress?.(off, total);
+  }
+}

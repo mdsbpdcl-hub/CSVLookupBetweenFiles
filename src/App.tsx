@@ -19,6 +19,7 @@ export interface Entry {
   meta: FileMeta;
   file: File; // the file as selected by the user (CSV or Excel workbook)
   csv?: File; // Excel only: temporary CSV copy of the chosen worksheet (disk-backed)
+  utf8?: { encoding: string; file: File }; // UTF-8 copy for the SQL engine (non-UTF-8 CSV files only)
   sheets?: { name: string; path: string; hidden: boolean }[];
   countPct?: number;
   convStage?: string;
@@ -242,6 +243,7 @@ export default function App() {
   function removeFile(id: string) {
     const e = entriesRef.current.find((x) => x.meta.id === id);
     if (e?.csv) removeConverted(`${id}.csv`);
+    if (e?.utf8) removeConverted(`${id}.utf8.csv`);
     setEntries((es) => es.filter((e) => e.meta.id !== id));
     setCfg((c) => {
       const keyColumns = { ...c.keyColumns }; delete keyColumns[id];
@@ -267,8 +269,29 @@ export default function App() {
   async function analyze() {
     setError(null); setBusy('analyze'); setStats(null); setPreview(null);
     setProgress({ stage: 'Starting', rowsDone: 0, elapsedMs: 0 });
-    const payload = entries.map((e) => ({ meta: e.meta, file: e.csv ?? e.file }));
+    let payload = entries.map((e) => ({ meta: e.meta, file: e.csv ?? e.file }));
     try {
+      if (mode === 'B') {
+        // DuckDB reads UTF-8 reliably; other encodings are first copied to UTF-8 in the background.
+        const t0 = Date.now();
+        payload = [];
+        for (const e of entriesRef.current) {
+          if (e.csv || e.meta.encoding === 'utf-8') {
+            payload.push({ meta: e.meta, file: e.csv ?? e.file });
+            continue;
+          }
+          let copy = e.utf8?.encoding === e.meta.encoding ? e.utf8.file : undefined;
+          if (!copy) {
+            const r = await inspector.current!.transcode(e.file, e.meta.encoding, `${e.meta.id}.utf8.csv`, (done, total) =>
+              setProgress({ stage: 'Preparing for the SQL engine (converting to UTF-8)', file: e.meta.name, rowsDone: 0, bytesDone: done, bytesTotal: total, percent: (done / Math.max(1, total)) * 100, elapsedMs: Date.now() - t0 }),
+            );
+            copy = r.file;
+            const enc = e.meta.encoding;
+            setEntries((es) => es.map((x) => (x.meta.id === e.meta.id ? { ...x, utf8: { encoding: enc, file: copy! } } : x)));
+          }
+          payload.push({ meta: { ...e.meta, encoding: 'utf-8', size: copy.size }, file: copy });
+        }
+      }
       let s: AnalysisStats;
       if (mode === 'A') {
         engine.current!.onProgress = setProgress;
@@ -364,6 +387,7 @@ export default function App() {
     await duck.current?.clear();
     await clearTemporary('all');
     // Excel sheets were converted into temporary copies that are now deleted: those files must be added again.
+    setEntries((es) => es.map((e) => (e.utf8 ? { ...e, utf8: undefined } : e))); // UTF-8 copies were deleted too
     const excelIds = entriesRef.current.filter((e) => e.meta.source).map((e) => e.meta.id);
     if (excelIds.length) {
       setEntries((es) => es.filter((e) => !e.meta.source));

@@ -107,3 +107,27 @@ describe('Mode B (DuckDB-Wasm) equals reference', () => {
     });
   }
 });
+
+describe('Windows-1252 ("ANSI") files in Mode B', () => {
+  it('DuckDB rejects them as latin-1, the UTF-8 copy matches correctly', async () => {
+    const { transcodeToUtf8 } = await import('../src/engine/csv');
+    // “Ram” – €5 written by Excel as ANSI: bytes 0x93, 0x94, 0x96, 0x80
+    const ansi = new Uint8Array([...new TextEncoder().encode('CA,Name\r\n001,'), 0x93, 0x52, 0x61, 0x6d, 0x94, 0x20, 0x96, 0x20, 0x80, 0x35, 0x0d, 0x0a]);
+    db.registerFileBuffer('ansi.csv', ansi);
+    expect(() => conn.query(`SELECT * FROM read_csv('ansi.csv', encoding = 'latin-1', all_varchar = true)`)).toThrow(/latin-1/);
+    const parts: Uint8Array[] = [];
+    await transcodeToUtf8(new Blob([ansi]), 'windows-1252', async (b) => void parts.push(b), { chunkBytes: 5 });
+    const utf8 = new Uint8Array(await new Blob(parts as BlobPart[]).arrayBuffer());
+    db.registerFileBuffer('ansi_utf8.csv', utf8);
+    const a = makeFile('a', 'A', 'a.csv', 'ID\r\n001\r\n');
+    const b = makeFile('b', 'B', 'ansi.csv', new TextDecoder().decode(utf8));
+    const plan = buildPlan([a.meta, b.meta], { a: 'ansi_a.csv', b: 'ansi_utf8.csv' }, baseCfg({ keyColumns: { a: ['ID'], b: ['CA'] } }), {
+      columns: [col('1', 'A', 'ID'), col('2', 'B', 'Name')],
+      missingValue: '',
+      warnOnMissing: true,
+    });
+    db.registerFileText('ansi_a.csv', 'ID\r\n001\r\n');
+    for (const s of plan.setup) conn.query(s);
+    expect(rows(plan.exportSql)).toEqual([['001', '“Ram” – €5']]);
+  });
+});

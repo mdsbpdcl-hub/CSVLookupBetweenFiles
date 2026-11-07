@@ -2,7 +2,7 @@
 // Mode A worker: file inspection, row counting, analysis, preview and export.
 // All parsing and matching happens here, off the UI thread.
 
-import { CancelledError, cleanHeaders, countRecords, inspectHeader } from '../engine/csv';
+import { CancelledError, cleanHeaders, countRecords, inspectHeader, transcodeToUtf8 } from '../engine/csv';
 import { MatchEngine, type EngineFile } from '../engine/core';
 import { directoryFactory, fileHandleFactory, memoryFactory, opfsAvailable, opfsFactory, OPFS_CONVERTED, type SinkFactory } from '../engine/sink';
 import { convertSheetToCsv, readWorkbook, XlsxError } from '../engine/xlsx';
@@ -59,6 +59,45 @@ async function sinkFor(opts: ExportOptions, handle: any): Promise<SinkFactory> {
   return memoryFactory();
 }
 
+/** A temporary, disk-backed output file in the browser's private storage (memory fallback). */
+async function tempOutput(name: string) {
+  let pos = 0;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(OPFS_CONVERTED, { create: true });
+    const fh = await dir.getFileHandle(name, { create: true });
+    let ah: any = await (fh as any).createSyncAccessHandle();
+    ah.truncate(0);
+    return {
+      write: async (b: Uint8Array) => {
+        let off = 0;
+        while (off < b.length) {
+          const n = ah.write(off ? b.subarray(off) : b, { at: pos });
+          if (n <= 0) throw new Error('Browser storage is full');
+          pos += n;
+          off += n;
+        }
+      },
+      finish: async (): Promise<File> => {
+        ah.flush();
+        ah.close();
+        ah = null;
+        return fh.getFile(); // disk-backed File, not held in memory
+      },
+      abort: () => {
+        try { ah?.close(); } catch { /* ignore */ }
+      },
+    };
+  } catch {
+    const parts: Uint8Array[] = [];
+    return {
+      write: async (b: Uint8Array) => void parts.push(b),
+      finish: async () => new File(parts as BlobPart[], name, { type: 'text/csv' }),
+      abort: () => {},
+    };
+  }
+}
+
 self.onmessage = async (ev: MessageEvent) => {
   const m = ev.data;
   const t0 = Date.now();
@@ -80,38 +119,7 @@ self.onmessage = async (ev: MessageEvent) => {
       }
       case 'convert': {
         cancelled = false;
-        const name: string = m.outName;
-        let write: (b: Uint8Array) => Promise<void>;
-        let finish: () => Promise<File>;
-        let pos = 0;
-        let ah: any = null;
-        try {
-          const root = await navigator.storage.getDirectory();
-          const dir = await root.getDirectoryHandle(OPFS_CONVERTED, { create: true });
-          const fh = await dir.getFileHandle(name, { create: true });
-          ah = await (fh as any).createSyncAccessHandle();
-          ah.truncate(0);
-          write = async (b) => {
-            let off = 0;
-            while (off < b.length) {
-              const n = ah.write(off ? b.subarray(off) : b, { at: pos });
-              if (n <= 0) throw new Error('Browser storage is full');
-              pos += n;
-              off += n;
-            }
-          };
-          finish = async () => {
-            ah.flush();
-            ah.close();
-            ah = null;
-            return fh.getFile(); // disk-backed File, not held in memory
-          };
-        } catch {
-          // no OPFS: keep the converted CSV as an in-memory Blob (browsers may page it to disk)
-          const parts: Uint8Array[] = [];
-          write = async (b) => void parts.push(b);
-          finish = async () => new File(parts as BlobPart[], name, { type: 'text/csv' });
-        }
+        const { write, finish, abort } = await tempOutput(m.outName);
         let last = 0;
         try {
           const res = await convertSheetToCsv(m.file, m.sheetPath, write, {
@@ -127,7 +135,29 @@ self.onmessage = async (ev: MessageEvent) => {
           const file = await finish();
           post({ type: 'converted', reqId: m.reqId, file, ...res, ms: Date.now() - t0 });
         } catch (e) {
-          if (ah) try { ah.close(); } catch { /* ignore */ }
+          abort();
+          throw e;
+        }
+        break;
+      }
+      case 'transcode': {
+        cancelled = false;
+        const { write, finish, abort } = await tempOutput(m.outName);
+        let last = 0;
+        try {
+          await transcodeToUtf8(m.file, m.encoding, write, {
+            isCancelled: () => cancelled,
+            onProgress: (done, total) => {
+              const now = Date.now();
+              if (now - last > 150 || done === total) {
+                last = now;
+                post({ type: 'convertProgress', reqId: m.reqId, stage: 'Converting to UTF-8', done, total });
+              }
+            },
+          });
+          post({ type: 'transcoded', reqId: m.reqId, file: await finish() });
+        } catch (e) {
+          abort();
           throw e;
         }
         break;

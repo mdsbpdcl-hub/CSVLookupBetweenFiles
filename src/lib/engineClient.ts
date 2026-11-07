@@ -82,6 +82,10 @@ export class EngineClient {
     );
   }
 
+  transcode(file: File, encoding: FileMeta['encoding'], outName: string, onProgress: (done: number, total: number) => void) {
+    return this.call<{ file: File }>({ type: 'transcode', file, encoding, outName }, (m) => onProgress(m.done, m.total));
+  }
+
   count(file: File, meta: FileMeta, onProgress: (done: number, total: number) => void) {
     return this.call<{ rows: number; ms: number }>({ type: 'count', file, meta }, (m) => onProgress(m.done, m.total));
   }

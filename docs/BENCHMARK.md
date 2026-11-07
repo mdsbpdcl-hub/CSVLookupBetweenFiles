@@ -133,7 +133,7 @@ and made matching ~10 % faster. All numbers above are after the fix.
 
 ## 3. Correctness checks
 
-- **Automated tests** (`npm test`, 46 tests, run in CI before every deployment):
+- **Automated tests** (`npm test`, 47 tests, run in CI before every deployment):
   parser edge cases at every chunk boundary (quotes, escaped quotes, multiline,
   CR/LF/CRLF), delimiter/encoding detection, normalisation, dates, CSV quoting and
   formula protection, XLSX validity, output splitting, the Excel reader (an openpyxl workbook and a hand-built one: shared/inline/rich text, namespaced XML, sparse cells, 1900/1904 dates, zero-padded formats, 16+ digit numbers, formulas, hidden sheets, damaged input) and an Excel sheet matched end-to-end, cartesian blocking, and

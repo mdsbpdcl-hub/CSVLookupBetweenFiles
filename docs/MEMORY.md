@@ -69,6 +69,7 @@ shows an estimate and warns when Mode B is unsuitable.
 | A file changed, moved or was deleted after adding it | “A file could not be read …” | Remove the file and add it again |
 | Old `.xls` / `.xlsb` / `.ods`, password-protected or damaged workbook | Error on the file row explaining what to do | Save as `.xlsx` or CSV from Excel |
 | IDs stored as numbers / 16+ digit numbers / formulas without saved results in Excel | Warning on the file row and on the Matching step | Store IDs as text in Excel; open and save the workbook in Excel |
+| “File is not latin-1 encoded” (older versions, Mode B) | — | Fixed: non-UTF-8 files are converted to UTF-8 before the SQL engine reads them. In the offline tool, save the file as “CSV UTF-8” in Excel |
 | Unclosed quote / wrong delimiter (one record > 16 MB) | “A single record exceeds 16 MB …” | Check the delimiter on the Upload step; fix the file |
 | Rows with too many/few columns | Count on the Process step, listed in the *data issue report* | Rows are still processed (missing cells blank) |
 | Unreadable dates for “keep newest” | Count on the Process step, listed in the issue report | Change the date format option or fix the data |
